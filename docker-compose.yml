@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  checker1:
+    build: .
+    env_file: .env_1
+    volumes:
+      - .:/app
+    command: mnemonics_1.txt
+
+  checker2:
+    build: .
+    env_file: .env_2
+    volumes:
+      - .:/app
+    command: mnemonics_2.txt
+
+  checker3:
+    build: .
+    env_file: .env_3
+    volumes:
+      - .:/app
+    command: mnemonics_3.txt
+
+  checker4:
+    build: .
+    env_file: .env_4
+    volumes:
+      - .:/app
+    command: mnemonics_4.txt
+
+  checker5:
+    build: .
+    env_file: .env_5
+    volumes:
+      - .:/app
+    command: mnemonics_5.txt
