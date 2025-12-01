@@ -8,7 +8,6 @@ from bip_utils import (
 )
 from dotenv import load_dotenv
 from termcolor import colored
-from concurrent.futures import ThreadPoolExecutor
 
 # Load environment variables
 load_dotenv()
@@ -28,16 +27,24 @@ CHAIN_IDS = {
 }
 
 # USDT contracts
-USDT_ETH_CONTRACT = os.getenv('USDT_ETH_CONTRACT').lower()
-USDT_BSC_CONTRACT = os.getenv('USDT_BSC_CONTRACT').lower()
-USDT_POLYGON_CONTRACT = os.getenv('USDT_POLYGON_CONTRACT').lower()
+USDT_ETH_CONTRACT = os.getenv('USDT_ETH_CONTRACT', '').lower()
+USDT_BSC_CONTRACT = os.getenv('USDT_BSC_CONTRACT', '').lower()
+USDT_POLYGON_CONTRACT = os.getenv('USDT_POLYGON_CONTRACT', '').lower()
 
 session = requests.Session()
 
 def send_telegram_message(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram credentials missing.")
+        return
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message}
-    session.post(url, data=payload)
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
+    try:
+        response = session.post(url, data=payload)
+        if response.status_code != 200:
+            print(f"❌ Telegram error: {response.text}")
+    except Exception as e:
+        print(f"❌ Telegram exception: {e}")
 
 def safe_request(url, params=None):
     for attempt in range(5):
@@ -131,12 +138,12 @@ def process_mnemonic(mnemonic):
             has_balance = True
 
         if has_balance:
-            message = f"🔐 Mnemonic: {mnemonic}\n"
+            message = f"🔐 *Mnemonic:* `{mnemonic}`\n"
             for name, addr, native_bal, usdt_bal in evm_results:
-                message += f"🟣 {name}: {addr} — {native_bal:.6f} {name.upper()}\n"
+                message += f"🟣 *{name}*: `{addr}` — {native_bal:.6f} {name.upper()}\n"
                 if usdt_bal > 0:
                     message += f"💵 USDT ({name}): {usdt_bal:.2f} USDT\n"
-            message += f"🟠 BTC: {btc_addr} — {btc_bal:.8f} BTC"
+            message += f"🟠 *BTC*: `{btc_addr}` — {btc_bal:.8f} BTC"
             send_telegram_message(message)
             print(colored("💰 Active Wallet Found!", "green", attrs=["bold"]))
             print(message)
@@ -146,15 +153,33 @@ def process_mnemonic(mnemonic):
         logging.error(f'Error: {e}')
 
 def main(mnemonic_file):
-    with open(mnemonic_file, 'r') as f:
-        mnemonics = f.read().splitlines()
+    log_file = f"checked_{mnemonic_file}"
+    while True:
+        with open(mnemonic_file, 'r') as f:
+            mnemonics = [line.strip() for line in f if line.strip()]
 
-    with ThreadPoolExecutor(max_workers=4) as executor:  # reduced thread count
-        executor.map(process_mnemonic, mnemonics)
+        if not mnemonics:
+            print(colored("✅ All mnemonics checked.", "cyan"))
+            send_telegram_message(f"✅ Finished checking all mnemonics in `{mnemonic_file}`.")
+            break
+
+        current = mnemonics[0]
+        process_mnemonic(current)
+
+        # Log the checked mnemonic
+        with open(log_file, 'a') as log:
+            log.write(current + "\n")
+
+        # Rewrite the file without the checked mnemonic
+        with open(mnemonic_file, 'w') as f:
+            for m in mnemonics[1:]:
+                f.write(m + "\n")
+
+        time.sleep(1)
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) != 2:
-        print("Usage: python wallet_checker.py mnemonics.txt")
+        print("Usage: python wallet_checker.py mnemonics_1.txt")
     else:
         main(sys.argv[1])
