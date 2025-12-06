@@ -20,25 +20,23 @@ BITQUERY_API_KEY = os.getenv('BITQUERY_API_KEY', '')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
-USDT_ETH_CONTRACT = os.getenv('USDT_ETH_CONTRACT', '').lower()
-USDT_BSC_CONTRACT = os.getenv('USDT_BSC_CONTRACT', '').lower()
-USDT_POLYGON_CONTRACT = os.getenv('USDT_POLYGON_CONTRACT', '').lower()
+USDT_ETH_CONTRACT = (os.getenv('USDT_ETH_CONTRACT', '') or '').lower()
+USDT_BSC_CONTRACT = (os.getenv('USDT_BSC_CONTRACT', '') or '').lower()
+USDT_POLYGON_CONTRACT = (os.getenv('USDT_POLYGON_CONTRACT', '') or '').lower()
 
-# Tuned for free Railway + Bitquery free tier
-BATCH_SIZE = 50                 # mnemonics per batch
-REQUESTS_PER_SEC = 2.0          # cap QPS per instance
-MAX_BACKOFF_SECONDS = 30        # max exponential backoff
-THREADS_PER_BATCH = 4           # keep low to conserve CPU
+BATCH_SIZE = 100
+REQUESTS_PER_SEC = 3.0
+MAX_BACKOFF_SECONDS = 30
+THREADS_PER_BATCH = 4
 
 BITQUERY_URL = "https://graphql.bitquery.io"
 session = requests.Session()
 session.headers.update({"X-API-KEY": BITQUERY_API_KEY})
 
 # ---------------------------
-# Utilities
+# Rate limiter
 # ---------------------------
 class RateLimiter:
-    """Simple token-bucket rate limiter."""
     def __init__(self, rate_per_sec: float):
         self.tokens = rate_per_sec
         self.rate = rate_per_sec
@@ -61,7 +59,6 @@ class RateLimiter:
 rate_limiter = RateLimiter(REQUESTS_PER_SEC)
 
 def safe_post(url: str, payload: dict, headers: dict = None, retries: int = 5):
-    """POST with rate limit + exponential backoff on 429/5xx."""
     attempt = 0
     while attempt < retries:
         rate_limiter.acquire()
@@ -84,6 +81,9 @@ def safe_post(url: str, payload: dict, headers: dict = None, retries: int = 5):
             attempt += 1
     return None
 
+# ---------------------------
+# Telegram alerts
+# ---------------------------
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("⚠️ Telegram credentials missing.")
@@ -97,6 +97,9 @@ def send_telegram(message: str):
     except Exception as e:
         logging.error(f"Telegram exception: {e}")
 
+# ---------------------------
+# Mnemonic validation & derivation
+# ---------------------------
 def is_valid_mnemonic(m: str) -> bool:
     try:
         return Bip39MnemonicValidator().IsValid(m.strip())
@@ -104,22 +107,24 @@ def is_valid_mnemonic(m: str) -> bool:
         return False
 
 def derive_evm_address(seed_bytes) -> str:
-    """Derive first external address on ETH path (used for ETH/BSC/Polygon)."""
-    node = Bip44.FromSeed(seed_bytes, Bip44Coins.ETHEREUM).Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(0)
+    node = (
+        Bip44.FromSeed(seed_bytes, Bip44Coins.ETHEREUM)
+        .Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(0)
+    )
     return node.PublicKey().ToAddress()
 
 def derive_btc_address(seed_bytes) -> str:
-    node = Bip44.FromSeed(seed_bytes, Bip44Coins.BITCOIN).Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(0)
+    node = (
+        Bip44.FromSeed(seed_bytes, Bip44Coins.BITCOIN)
+        .Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(0)
+    )
     return node.PublicKey().ToAddress()
 
 # ---------------------------
 # Bitquery GraphQL
 # ---------------------------
 def gql_evm_balances_batch(addresses: List[str], network: str) -> Dict[str, Dict]:
-    """
-    Query balances for multiple addresses on an EVM network.
-    Returns {address: {"native": float, "tokens": {contract: (symbol, value)}}}
-    """
+    # network: "ethereum", "bsc", or "polygon"
     query = f"""
     query ($addresses: [String!]) {{
       {network}(network: {network}) {{
@@ -148,7 +153,7 @@ def gql_evm_balances_batch(addresses: List[str], network: str) -> Dict[str, Dict
                 caddr = (b.get("currency", {}).get("address") or "").lower()
                 sym = b.get("currency", {}).get("symbol") or ""
                 val = float(b.get("value") or 0)
-                if caddr == "" or caddr is None:
+                if not caddr:
                     native = val
                 else:
                     tokens[caddr] = (sym, val)
@@ -158,10 +163,6 @@ def gql_evm_balances_batch(addresses: List[str], network: str) -> Dict[str, Dict
     return out
 
 def gql_btc_balances_batch(addresses: List[str]) -> Dict[str, float]:
-    """
-    Query BTC balances for multiple addresses.
-    Returns {address: btc_balance_btc}
-    """
     query = """
     query ($addresses: [String!]) {
       bitcoin {
@@ -188,61 +189,55 @@ def gql_btc_balances_batch(addresses: List[str]) -> Dict[str, float]:
     return out
 
 # ---------------------------
-# Processing logic
+# Batch processing
 # ---------------------------
 def check_batch(mnemonics: List[str]) -> List[Tuple[str, Dict]]:
-    """
-    Derive addresses for mnemonics and fetch balances in batches.
-    Returns list of (mnemonic, result_dict) where result_dict includes chain balances.
-    """
+    # Generate seeds
     seeds = []
     for m in mnemonics:
-        m = m.strip()
-        if not is_valid_mnemonic(m):
-            logging.warning(f"Invalid mnemonic skipped: {m}")
+        mm = m.strip()
+        if not is_valid_mnemonic(mm):
+            logging.warning(f"Invalid mnemonic skipped: {mm}")
             seeds.append(None)
             continue
         try:
-            seeds.append(Bip39SeedGenerator(m).Generate())
+            seeds.append(Bip39SeedGenerator(mm).Generate())
         except Exception as e:
-            logging.error(f"Seed gen error: {e}")
+            logging.error(f"Seed generation error: {e}")
             seeds.append(None)
 
     # Derive addresses
     evm_addrs, btc_addrs = [], []
-    addr_map_evm = {}   # index -> evm address
-    addr_map_btc = {}   # index -> btc address
+    idx_to_evm, idx_to_btc = {}, {}
     for i, seed in enumerate(seeds):
         if seed is None:
-            addr_map_evm[i] = None
-            addr_map_btc[i] = None
+            idx_to_evm[i] = None
+            idx_to_btc[i] = None
             continue
         try:
-            a_evm = derive_evm_address(seed)
-            a_btc = derive_btc_address(seed)
+            evm_addr = derive_evm_address(seed)
+            btc_addr = derive_btc_address(seed)
         except Exception as e:
             logging.error(f"Derivation error: {e}")
-            a_evm, a_btc = None, None
-        addr_map_evm[i] = a_evm
-        addr_map_btc[i] = a_btc
-        if a_evm:
-            evm_addrs.append(a_evm)
-        if a_btc:
-            btc_addrs.append(a_btc)
+            evm_addr, btc_addr = None, None
+        idx_to_evm[i] = evm_addr
+        idx_to_btc[i] = btc_addr
+        if evm_addr:
+            evm_addrs.append(evm_addr)
+        if btc_addr:
+            btc_addrs.append(btc_addr)
 
-    # Query EVM networks in batches
+    # Query balances
     eth = gql_evm_balances_batch(evm_addrs, "ethereum")
     bsc = gql_evm_balances_batch(evm_addrs, "bsc")
     polygon = gql_evm_balances_batch(evm_addrs, "polygon")
-
-    # BTC balances
     btc = gql_btc_balances_batch(btc_addrs)
 
     # Collect results
     results = []
     for i, m in enumerate(mnemonics):
-        a_evm = addr_map_evm.get(i)
-        a_btc = addr_map_btc.get(i)
+        a_evm = idx_to_evm.get(i)
+        a_btc = idx_to_btc.get(i)
         item = {
             "mnemonic": m.strip(),
             "eth": {"addr": a_evm, "native": 0.0, "usdt": 0.0},
@@ -257,14 +252,20 @@ def check_batch(mnemonics: List[str]) -> List[Tuple[str, Dict]]:
             item["eth"]["native"] = e.get("native", 0.0)
             item["bsc"]["native"] = b.get("native", 0.0)
             item["polygon"]["native"] = p.get("native", 0.0)
-            item["eth"]["usdt"] = e.get("tokens", {}).get(USDT_ETH_CONTRACT, ("USDT", 0.0))[1] if USDT_ETH_CONTRACT else 0.0
-            item["bsc"]["usdt"] = b.get("tokens", {}).get(USDT_BSC_CONTRACT, ("USDT", 0.0))[1] if USDT_BSC_CONTRACT else 0.0
-            item["polygon"]["usdt"] = p.get("tokens", {}).get(USDT_POLYGON_CONTRACT, ("USDT", 0.0))[1] if USDT_POLYGON_CONTRACT else 0.0
+            if USDT_ETH_CONTRACT:
+                item["eth"]["usdt"] = e.get("tokens", {}).get(USDT_ETH_CONTRACT, ("USDT", 0.0))[1]
+            if USDT_BSC_CONTRACT:
+                item["bsc"]["usdt"] = b.get("tokens", {}).get(USDT_BSC_CONTRACT, ("USDT", 0.0))[1]
+            if USDT_POLYGON_CONTRACT:
+                item["polygon"]["usdt"] = p.get("tokens", {}).get(USDT_POLYGON_CONTRACT, ("USDT", 0.0))[1]
         if a_btc:
             item["btc"]["native"] = btc.get(a_btc, 0.0)
         results.append((m.strip(), item))
     return results
 
+# ---------------------------
+# Alerts
+# ---------------------------
 def alert_if_active(item: Dict):
     has_balance = (
         (item["eth"]["native"] > 0) or (item["eth"]["usdt"] > 0) or
@@ -290,16 +291,16 @@ def alert_if_active(item: Dict):
             lines.append(f"💵 USDT (Polygon): {item['polygon']['usdt']:.2f} USDT")
     if item["btc"]["addr"]:
         lines.append(f"🟠 BTC: `{item['btc']['addr']}` — {item['btc']['native']:.8f} BTC")
+
     send_telegram("\n".join(lines))
     print(colored("💰 Active Wallet Found!", "green", attrs=["bold"]))
     print("\n".join(lines))
     return True
 
 # ---------------------------
-# File loop (delete as you go)
+# File I/O
 # ---------------------------
 def read_chunk(file_path: str, n: int) -> List[str]:
-    """Read up to n mnemonics from file."""
     mnemonics = []
     with open(file_path, "r") as f:
         for _ in range(n):
@@ -312,13 +313,19 @@ def read_chunk(file_path: str, n: int) -> List[str]:
     return mnemonics
 
 def trim_file_head(file_path: str, count: int):
-    """Remove first 'count' lines from file efficiently."""
     with open(file_path, "r") as f:
         lines = f.readlines()
     with open(file_path, "w") as f:
         f.writelines(lines[count:])
 
+# ---------------------------
+# Main loop
+# ---------------------------
 def main(mnemonic_file: str):
+    if not BITQUERY_API_KEY:
+        print(colored("❌ BITQUERY_API_KEY is missing. Set it in Railway Variables.", "red"))
+        return
+
     checked_log = f"checked_{os.path.basename(mnemonic_file)}"
     batch_index = 0
 
@@ -334,7 +341,6 @@ def main(mnemonic_file: str):
 
         results = check_batch(chunk)
 
-        # Alerts + logging
         hits = 0
         with open(checked_log, "a") as logf:
             for m, item in results:
@@ -342,13 +348,10 @@ def main(mnemonic_file: str):
                     hits += 1
                 logf.write(m + "\n")
 
-        # Delete processed mnemonics from file
         trim_file_head(mnemonic_file, len(chunk))
-
-        # Progress message
         print(colored(f"Batch #{batch_index} done. Hits: {hits}.", "cyan"))
 
-        # Gentle throttle between batches to avoid spikes
+        # Gentle throttle between batches
         time.sleep(0.5)
 
 if __name__ == "__main__":
